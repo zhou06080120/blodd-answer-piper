@@ -78,7 +78,10 @@ pip install -e ".[train]"
 cp .env.example .env
 # 可选：DEEPSEEK_API_KEY（数据合成用，不配置自动降级离线模板合成）
 # BP_BERT_PATH 指向本地 bert-base-chinese 目录
+# RATE_LIMIT_RPM 请求限流：每分钟每 IP 上限（默认 60，设 0 关闭）
 ```
+
+请求限流为内置中间件（`src/rate_limit.py`，纯标准库滑动窗口）：默认每 IP 每分钟 60 次请求，超限返回 429 + `Retry-After`；`/health` 探针豁免。
 
 ### 启动服务
 
@@ -116,7 +119,7 @@ docker run -p 8000:8000 \
 ## 测试与质量
 
 ```bash
-pytest          # 75 用例，覆盖率 77%（门槛 30%，内置于 pyproject）
+pytest          # 81 用例，覆盖率 77%（门槛 30%，内置于 pyproject）
 ruff check .    # lint
 ```
 
@@ -161,7 +164,7 @@ ruff check .    # lint
 ├── eval_retrieval.py           # 检索质量评测
 ├── faq_answer.py               # 命令行交互问答（--no-hybrid / --no-onnx 教学对比）
 ├── smoke_test.py               # 零依赖冒烟自检
-├── tests/                      # 75 用例，6 个测试模块
+├── tests/                      # 81 用例，7 个测试模块
 └── data/                       # 基线数据集（432 句对）+ 扩容数据集（4970 句对）
 ```
 

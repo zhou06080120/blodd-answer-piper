@@ -43,6 +43,7 @@ from pydantic import BaseModel  # noqa: E402        # 请求体模型（自动�
 from active_learning import ActiveLearning, AnnotationQueue, IntentClustering  # noqa: E402  # 主动学习闭环三件套：迭代编排/标注队列/意图聚类
 from hybrid_retriever import HybridRetriever  # noqa: E402   # 两阶段混合检索器
 from onnx_runtime import load_dense_encoder  # noqa: E402    # Dense 编码后端工厂（ONNX-INT8 优先自动降级）
+from rate_limit import install_rate_limit  # noqa: E402  # 按 IP 滑动窗口限流（环境变量 RATE_LIMIT_RPM 控制，0=关闭）
 
 KB_DEFAULT = ROOT / "data" / "blood_pressure_expanded" / "faq_extended.json"  # 默认知识库（扩容版）
 CKPT_PREF = [ROOT / "outputs" / "checkpoints" / "biencoder_hardneg_best.pt",
@@ -179,6 +180,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="血压计 FAQ 智能问答服务", lifespan=lifespan)  # 创建应用实例并挂载生命周期钩子
+install_rate_limit(app)  # 注册按 IP 滑动窗口限流中间件（RATE_LIMIT_RPM 默认 60/min，0=关闭；/health 探针豁免）
 
 
 # ── 在线问答 ─────────────────────────────────────────────────────────────────
