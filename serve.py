@@ -26,6 +26,7 @@
 
 import asyncio                                   # 异步事件循环、Lock 与 to_thread
 import json                                       # KB/请求体的 JSON 处理
+import logging                                   # 日志框架（setup_logging 之后的结构化打点用）
 import os                                         # 读取环境变量（BP_KB/BP_THRESHOLD 等）
 import sys                                        # 运行时模块路径注入
 import time                                       # 端到端延迟计时（perf_counter）
@@ -42,8 +43,12 @@ from pydantic import BaseModel  # noqa: E402        # 请求体模型（自动�
 
 from active_learning import ActiveLearning, AnnotationQueue, IntentClustering  # noqa: E402  # 主动学习闭环三件套：迭代编排/标注队列/意图聚类
 from hybrid_retriever import HybridRetriever  # noqa: E402   # 两阶段混合检索器
+from observability import install_observability, setup_logging  # noqa: E402  # P2 可观测性：结构化日志初始化 + 最外层指标中间件 + /metrics 端点
 from onnx_runtime import load_dense_encoder  # noqa: E402    # Dense 编码后端工厂（ONNX-INT8 优先自动降级）
 from rate_limit import install_rate_limit  # noqa: E402  # 按 IP 滑动窗口限流（环境变量 RATE_LIMIT_RPM 控制，0=关闭）
+
+setup_logging()                                   # 初始化结构化日志（JSON 行式；须在常量/组件打日志之前完成，BP_LOG_FORMAT=text 可切人读格式）
+logger = logging.getLogger(__name__)              # serve 模块日志器：lifespan 启动信息与低置信入队告警统一经它输出
 
 KB_DEFAULT = ROOT / "data" / "blood_pressure_expanded" / "faq_extended.json"  # 默认知识库（扩容版）
 CKPT_PREF = [ROOT / "outputs" / "checkpoints" / "biencoder_hardneg_best.pt",
@@ -152,18 +157,20 @@ def rebuild_index(faqs=None):
 async def lifespan(app: FastAPI):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # 选设备
     ckpt = next((c for c in CKPT_PREF if c.exists()), CKPT_PREF[-1])  # 按优先级取第一个存在的 Dense 权重（都不存在则取最后一个路径，由加载器报错）
-    print(f"[serve] dense checkpoint: {ckpt.name}")   # 打印选中的权重文件名
+    logger.info(f"[serve] dense checkpoint: {ckpt.name}", extra={"checkpoint": str(ckpt.name)})  # 记录选中的权重文件名
     S["dense_enc"], meta = load_dense_encoder(        # 构建 Dense 编码器（ONNX-INT8→fp32→PyTorch 自动降级）
         ckpt, BERT_PATH, onnx_dir=ONNX_DIR,
         max_length=64, prefer="onnx" if ONNX_DIR.exists() else "torch")  # ONNX 目录存在则优先量化后端
-    print(f"[serve] dense 编码后端: {meta['backend']}-{meta.get('kind') or meta.get('device','')}")  # 打印实际后端（onnx-int8/onnx-fp32/torch）
+    logger.info(f"[serve] dense 编码后端: {meta['backend']}-{meta.get('kind') or meta.get('device', '')}",
+                extra={"backend": meta["backend"], "kind": meta.get("kind") or meta.get("device", "")})  # 记录实际后端（onnx-int8/onnx-fp32/torch）
 
     S["cross_score"] = None                           # 先假定无精排
     if CE_CKPT.exists():                              # 精排权重存在
         S["cross_score"] = build_cross_score(CE_CKPT, BERT_PATH, device)  # 构建打分闭包
-        print(f"[serve] CrossEncoder 精排已加载（{str(device)}）")  # 打印精排就绪
+        logger.info(f"[serve] CrossEncoder 精排已加载（{str(device)}）", extra={"device": str(device)})  # 记录精排就绪
     else:                                             # 无 CE 权重 → 降级
-        print("[serve] 未找到 CrossEncoder，降级 RRF+余弦组合分")  # 说明降级打分方式
+        logger.warning("[serve] 未找到 CrossEncoder，降级 RRF+余弦组合分",
+                       extra={"crossencoder_ckpt": str(CE_CKPT)})  # 说明降级打分方式
 
     S["queue"] = AnnotationQueue()                    # 标注队列（低置信样本落盘 data/feedback/queue.jsonl）
     S["threshold"] = float(os.getenv("BP_THRESHOLD", "0.82"))  # 置信度阈值（环境变量可覆盖，默认 0.82）
@@ -173,14 +180,19 @@ async def lifespan(app: FastAPI):
 
     faqs, kb_path = load_kb()                         # 读取知识库
     rebuild_index(faqs)                               # 首次建立混合检索索引
-    print(f"[serve] KB: {len(faqs)} 条 FAQ, 索引 {S['retriever'].n} 个候选问法 | "
-          f"conf 阈值 = {S['threshold']}")            # 打印服务就绪概要
+    logger.info(f"[serve] KB: {len(faqs)} 条 FAQ, 索引 {S['retriever'].n} 个候选问法 | "
+                f"conf 阈值 = {S['threshold']}",
+                extra={"faq_count": len(faqs), "index_size": S["retriever"].n,
+                       "threshold": S["threshold"]})  # 记录服务就绪概要
     yield                                             # ← 服务运行期：处理请求；直到进程关闭才继续往下
     S.clear()                                         # 关闭期：清空全局状态，释放引用
 
 
 app = FastAPI(title="血压计 FAQ 智能问答服务", lifespan=lifespan)  # 创建应用实例并挂载生命周期钩子
 install_rate_limit(app)  # 注册按 IP 滑动窗口限流中间件（RATE_LIMIT_RPM 默认 60/min，0=关闭；/health 探针豁免）
+install_observability(app)  # 注册可观测中间件（最外层：X-Request-ID + Prometheus 指标 + /metrics 端点）。
+# ↑ 注册顺序关键：FastAPI 后注册的 HTTP 中间件位于外层，限流 429 响应也会流经本中间件，
+#   被 http_requests_total{status="429"} 与 rate_limit_rejected_total 统计到。
 
 
 # ── 在线问答 ─────────────────────────────────────────────────────────────────
@@ -210,7 +222,7 @@ async def query(q: QueryIn):
                 [{"faq_id": r["faq_id"], "question": r["question"],
                   "confidence": r["confidence"]} for r in ret["results"]])  # 记录原句+置信度+Top 候选，供标注员参考
         except Exception as e:                         # 任何写入异常
-            print(f"[serve] 队列写入失败（忽略）: {e}")  # 仅打日志，不中断响应
+            logger.warning(f"[serve] 队列写入失败（忽略）: {e}", extra={"error": str(e)})  # 仅记告警日志，不中断响应
 
     return {                                           # 组装 JSON 响应
         "query": q.query.strip(),                      # 回显清洗后的问句

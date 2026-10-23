@@ -1,0 +1,6 @@
+{
+  "top1": 0.95,
+  "top3": 0.95,
+  "holdout_per_faq": 2,
+  "queries": 60
+}

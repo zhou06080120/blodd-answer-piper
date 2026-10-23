@@ -15,8 +15,11 @@ provider，故线上默认走 INT8 CPU 路径；GPU 服务器可在部署时换�
 """
 # ↑ 模块级 docstring：本文件负责训练后模型的"部署形态"——导出 ONNX、量化压缩、双后端推理
 
+import logging                                 # 结构化日志（serve 在线链路的降级告警经它输出）
 import os                                       # 读取环境变量 BP_BERT_PATH（容器部署时覆盖 checkpoint 内记录的本机训练路径）
 import numpy as np                              # 数值计算库：所有后端的向量张量都以 numpy 数组流转
+
+logger = logging.getLogger(__name__)           # 本模块日志器：ONNX 逐档降级时记录失败原因
 
 try:                                            # 尝试导入 onnxruntime（部署机可能没装）
     import onnxruntime as ort                  # ONNX 推理引擎（比 PyTorch CPU 推理快得多）
@@ -180,7 +183,8 @@ def load_dense_encoder(biencoder_ckpt, bert_path, onnx_dir=None, device=None,
                                 device="cpu")   # ONNX 路径固定 CPU
                     return enc, meta            # 命中即返回（最优先档位生效）
                 except Exception as e:           # 本文件加载失败（损坏/缺算子等）
-                    print(f"[onnx_runtime] {f.name} 加载失败（{e}），尝试下一档。")  # 打印原因并继续降级
+                    logger.warning(f"[onnx_runtime] {f.name} 加载失败（{e}），尝试下一档。",
+                                   extra={"model": f.name, "error": str(e)})  # 记录原因并继续降级
 
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")  # 回退 PyTorch：自动选择 GPU/CPU
     model = build_biencoder(bert_path=bert_path, pool=saved.get("pool", "mean"),  # 按 checkpoint 超参重建模型结构

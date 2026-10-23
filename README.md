@@ -126,6 +126,42 @@ ruff check .    # lint
 - 测试全程零外部依赖：FakeDenseEncoder 字符袋假编码器（L2 归一化）替代真实 BERT，无需模型权重 / API Key / GPU，本地与 CI 行为完全一致
 - 单测驱动修复 3 处真实缺陷：exclude_texts 屏蔽项经 Dense 名次泄漏进融合候选尾部、嵌入 JSON 抽取正则缺捕获组导致兜底分支死代码、checkpoint 内记录的训练机路径覆盖 BP_BERT_PATH 环境变量（容器部署失效）
 
+## 可观测性
+
+`src/observability.py`（P2）：结构化 JSON 日志 + Prometheus 指标中间件（最外层）+ `GET /metrics` 抓取端点（限流豁免）。
+
+**指标一览**（`curl localhost:8000/metrics`，Prometheus 文本协议）：
+
+| 指标 | 类型 | 标签 | 含义 |
+|---|---|---|---|
+| `http_requests_total` | Counter | method / path / status | HTTP 请求总数；path 取路由模板（如 `/annotations/{rid}`）防标签基数爆炸，未匹配路由记 `unmatched` |
+| `http_request_duration_seconds` | Histogram | path | HTTP 请求延迟（桶覆盖 5ms~10s） |
+| `rate_limit_rejected_total` | Counter | — | 限流拒绝（429）总数，429 唯一来源是限流中间件（中间件注册顺序保证其被统计） |
+| `llm_calls_total` | Counter | status=ok/error | LLM 调用计数（`llm_call_timer()` 埋点） |
+| `llm_call_duration_seconds` | Histogram | — | LLM 调用延迟（桶覆盖 0.1s~60s） |
+| `X-Request-ID` | 响应头 | — | 请求标识：网关透传或自动生成（uuid4 前 12 位十六进制），响应头原样回写，全链路日志按它串联一次请求 |
+
+**日志**：默认 JSON 行式（每行自动携带 `request_id` 与 `extra` 业务字段），供 Docker / Loki 等采集器直接解析；`BP_LOG_FORMAT=text` 切人读格式，`BP_LOG_LEVEL` 控制级别（默认 INFO）。真实样例：
+
+```json
+{"ts": "2026-10-23T10:00:00", "level": "INFO", "logger": "serve", "msg": "[serve] KB: 30 条 FAQ, 索引 1075 个候选问法 | conf 阈值 = 0.82", "request_id": "3f2c9d18ab47", "faq_count": 30, "index_size": 1075, "threshold": 0.82}
+```
+
+## 评估门禁
+
+`evals/gate.py` + `evals/thresholds.json`（P2）：BM25-only **变体留出（hold-out）检索门禁**——每个 FAQ 从 `variants` 末尾留出 2 条作查询（不在语料中，无泄漏），其余变体 + 标准问作语料建 BM25 索引（当前 60 查询 × 1015 语料，30 FAQ），统计 Top1/Top3 的 FAQ 命中率；门禁断言实测 ≥ 阈值，任一 FAIL 退出码 1，CI 在 test 与 docker 之间以 `eval-gate` job 拦截。阈值文件同时绑定 `holdout_per_faq` / `queries` 口径，防止悄悄稀释评测集。
+
+| 项 | 实测（真实运行） | 阈值（留安全余量取整） |
+|---|---|---|
+| Top1 命中率 | **1.0000**（60/60） | 0.95 |
+| Top3 命中率 | **1.0000**（60/60） | 0.95 |
+
+> 注意口径区分：门禁是 **CI 轻量版，BM25-only、变体留出**；上文「检索质量」小节的混合检索全量基线（Top1 94.91% / Top3 98.61%，216 查询 × 1075 候选，含 Dense 召回 + CE 精排）依赖 BERT 权重，属于本地/集成环境（`eval_retrieval.py`），两者勿混淆。
+
+```bash
+python evals/gate.py    # 本地复跑（纯 numpy 确定性，零模型权重）
+```
+
 ## API 一览
 
 | 方法 | 路径 | 说明 |

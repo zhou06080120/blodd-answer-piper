@@ -34,6 +34,7 @@ dependencies = [
     "openai>=1.30.0",
     "tqdm>=4.66.0",
     "scikit-learn>=1.3.0",
+    "prometheus-client>=0.20",  # P2 可观测性：/metrics 抓取端点 + 进程内指标（observability.py）
 ]
 
 [project.optional-dependencies]
@@ -68,6 +69,7 @@ addopts = [
     "--cov=onnx_runtime",
     "--cov=dataset",
     "--cov=serve",
+    "--cov=observability",
     "--cov-report=term-missing",
     "--cov-fail-under=30",
 ]
