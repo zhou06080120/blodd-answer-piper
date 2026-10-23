@@ -1,0 +1,37 @@
+# 构建上下文瘦身：Dockerfile 只 COPY serve.py/src/data + builder 的 pyproject/README，
+# 其余全部排除（尤其 outputs/ 权重与 .venv，动辄数百 MB）
+
+# 版本库与 CI
+.git
+.github
+
+# Python 运行产物与虚拟环境
+.venv
+venv
+__pycache__
+*.pyc
+*.egg-info
+
+# 测试与工具缓存
+tests
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# 训练/推理产物与运行期反馈数据（模型即数据，运行时挂载）
+outputs
+src/data
+
+# 本地配置与个人文档（含 API Key，绝不进镜像）
+.env
+.env.local
+RESUME_PROJECT.md
+INTERVIEW_QA.md
+
+# IDE 与系统
+.idea
+.vscode
+debug.log
+Thumbs.db
+.DS_Store
