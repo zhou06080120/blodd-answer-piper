@@ -70,6 +70,7 @@ addopts = [
     "--cov=dataset",
     "--cov=serve",
     "--cov=observability",
+    "--cov=compliance",
     "--cov-report=term-missing",
     "--cov-fail-under=30",
 ]

@@ -39,9 +39,11 @@ sys.path.insert(0, str(SRC))                      # 注入 src/ 到模块搜索�
 
 import torch  # noqa: E402                         # 深度学习框架（改路径后导入，豁免 E402）
 from fastapi import FastAPI, HTTPException  # noqa: E402  # Web 框架与可控异常（自动转 4xx 响应）
+from fastapi.responses import JSONResponse  # noqa: E402  # 400 校验响应体（detail 与 HTTPException 同构）
 from pydantic import BaseModel  # noqa: E402        # 请求体模型（自动校验/序列化）
 
 from active_learning import ActiveLearning, AnnotationQueue, IntentClustering  # noqa: E402  # 主动学习闭环三件套：迭代编排/标注队列/意图聚类
+from compliance import MEDICAL_DISCLAIMER, ComplianceError, validate_query  # noqa: E402  # P3 医疗合规：统一免责声明 + 输入校验（检索服务不做注入拦截）
 from hybrid_retriever import HybridRetriever  # noqa: E402   # 两阶段混合检索器
 from observability import install_observability, setup_logging  # noqa: E402  # P2 可观测性：结构化日志初始化 + 最外层指标中间件 + /metrics 端点
 from onnx_runtime import load_dense_encoder  # noqa: E402    # Dense 编码后端工厂（ONNX-INT8 优先自动降级）
@@ -199,15 +201,18 @@ install_observability(app)  # 注册可观测中间件（最外层：X-Request-I
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 路由：POST /query —— 在线问答主接口
-# 功能：两阶段混合检索回答；低置信自动拦截 + 异步入队；统计端到端延迟
-# 输入：QueryIn（query 必填 + top_k）　输出：命中结果/兜底话术 + 候选列表 + 延迟
+# 功能：输入合规校验（空拒/超长拒/控制字符剥离）→ 两阶段混合检索回答；
+#       低置信自动拦截 + 异步入队；统计端到端延迟；全响应附带医疗免责声明
+# 输入：QueryIn（query 必填 + top_k）　输出：命中结果/兜底话术 + 候选列表 + 延迟 + 免责声明
 # ═══════════════════════════════════════════════════════════════════════════
 @app.post("/query")
 async def query(q: QueryIn):
-    if not q.query.strip():                           # 空白问句
-        raise HTTPException(400, "query 不能为空")    # 直接返回 400 参数错误
+    try:                                              # P3 输入合规校验：不通过直接 400，不进检索
+        cleaned = validate_query(q.query)             # 统一清洗入口（检索服务无 LLM 生成，天然免疫注入，仅做输入校验）
+    except ComplianceError as e:                      # 校验失败（空输入 / 超长）
+        return JSONResponse(status_code=400, content={"detail": str(e)})  # 异常 message 作 detail（str(e) 即构造时传入的报错文案）
     t0 = time.perf_counter()                          # 记录起始时间戳（高精度）
-    ret = await asyncio.to_thread(S["retriever"].search, q.query.strip(),
+    ret = await asyncio.to_thread(S["retriever"].search, cleaned,
                                   q.top_k, S["threshold"], S["threshold"])  # 检索丢线程池执行，避免阻塞事件循环
     elapsed_ms = (time.perf_counter() - t0) * 1000    # 计算端到端毫秒延迟
     S["lat"].append(elapsed_ms)                       # 记录本次延迟样本
@@ -218,14 +223,14 @@ async def query(q: QueryIn):
         # 低置信度拦截：异步推入待标注队列（落盘不阻塞响应）
         try:                                           # 入队失败不应影响主回答
             await asyncio.to_thread(                   # 落盘写 JSONL 属阻塞 IO → 丢线程池
-                S["queue"].append, q.query.strip(), ret["confidence"],
+                S["queue"].append, cleaned, ret["confidence"],
                 [{"faq_id": r["faq_id"], "question": r["question"],
                   "confidence": r["confidence"]} for r in ret["results"]])  # 记录原句+置信度+Top 候选，供标注员参考
         except Exception as e:                         # 任何写入异常
             logger.warning(f"[serve] 队列写入失败（忽略）: {e}", extra={"error": str(e)})  # 仅记告警日志，不中断响应
 
     return {                                           # 组装 JSON 响应
-        "query": q.query.strip(),                      # 回显清洗后的问句
+        "query": cleaned,                              # 回显清洗后的问句
         "matched": ret["matched"],                    # 是否过置信度阈值
         "confidence": ret["confidence"],               # 融合后的综合置信度
         "threshold": S["threshold"],                   # 当前生效阈值
@@ -236,6 +241,7 @@ async def query(q: QueryIn):
         "candidates": [{"faq_id": r["faq_id"], "question": r["question"],
                         "confidence": r["confidence"]} for r in ret["results"]],  # Top-k 候选明细
         "elapsed_ms": round(elapsed_ms, 2),            # 本次端到端延迟（毫秒）
+        "disclaimer": MEDICAL_DISCLAIMER,              # P3 医疗免责声明：命中与低置信拦截全响应统一附带
     }
 
 

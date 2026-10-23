@@ -3,7 +3,7 @@
 [![CI](https://github.com/zhou06080120/blodd-answer-piper/actions/workflows/ci.yml/badge.svg)](https://github.com/zhou06080120/blodd-answer-piper/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Coverage](https://img.shields.io/badge/coverage-77%25-brightgreen)](https://github.com/zhou06080120/blodd-answer-piper/actions)
+[![Coverage](https://img.shields.io/badge/coverage-79%25-brightgreen)](https://github.com/zhou06080120/blodd-answer-piper/actions)
 
 面向医疗器械（血压计）场景的 FAQ 智能问答引擎：Sentence-BERT 双塔召回（难负例对比训练）+ BM25/Dense/RRF 混合检索 + CrossEncoder 精排的两阶段架构，ONNX INT8 量化 CPU 部署，低置信拦截 + 意图聚类 + 灰度转正的主动学习数据闭环，通过 FastAPI 提供在线服务。
 
@@ -119,7 +119,7 @@ docker run -p 8000:8000 \
 ## 测试与质量
 
 ```bash
-pytest          # 81 用例，覆盖率 77%（门槛 30%，内置于 pyproject）
+pytest          # 98 用例，覆盖率 79%（门槛 30%，内置于 pyproject）
 ruff check .    # lint
 ```
 
@@ -146,6 +146,17 @@ ruff check .    # lint
 ```json
 {"ts": "2026-10-23T10:00:00", "level": "INFO", "logger": "serve", "msg": "[serve] KB: 30 条 FAQ, 索引 1075 个候选问法 | conf 阈值 = 0.82", "request_id": "3f2c9d18ab47", "faq_count": 30, "index_size": 1075, "threshold": 0.82}
 ```
+
+## 医疗合规
+
+`src/compliance.py`（P3）：面向医疗健康场景的统一合规模块，纯标准库实现（零第三方依赖），输入校验与免责声明全服务同一口径。
+
+| 能力 | 说明 |
+|---|---|
+| **统一免责声明** | `/query` 全响应附带 `disclaimer` 字段（`MEDICAL_DISCLAIMER` 常量，API 与前端共用同一文案）：无论命中标准答案还是低置信拦截兜底话术，均声明"仅供健康教育参考，不能替代执业医师诊疗意见；如有不适或异常读数，请及时就医" |
+| **输入校验** | `validate_query()` 统一入口：None / 空串 / 纯空白拒绝、控制字符剥离（保留 `\t\n\r`，防日志注入）、长度上限 500 字（超长多为滥用）；不通过返回 400 + 具体原因文案，用清洗后文本检索 |
+| **不做注入拦截** | 纯检索服务无 LLM 生成，天然免疫 Prompt 注入，仅做输入校验；模块内 `check_injection()` 供 LLM 生成类姊妹项目复用 |
+| **密钥零硬编码** | API Key 等敏感配置仅经环境变量注入（`.env.example` 逐项注释说明），`.env` 已被 .gitignore 排除，仓库零密钥落盘 |
 
 ## 评估门禁
 
@@ -184,6 +195,7 @@ python evals/gate.py    # 本地复跑（纯 numpy 确定性，零模型权重�
 │   ├── hybrid_retriever.py     # BM25+Dense 双路召回 → RRF → CE 精排 → 双闸门置信度
 │   ├── active_learning.py      # 标注队列 / 意图聚类 / draft 生成 / 灰度转正
 │   ├── onnx_runtime.py         # ONNX 导出 + INT8 量化 + 双后端编码器工厂
+│   ├── compliance.py           # 医疗合规：统一免责声明 + 输入校验（纯标准库）
 │   ├── llm_synth.py            # LLM / 离线模板双通道数据合成
 │   ├── model.py                # BiEncoder / CrossEncoder 定义
 │   ├── dataset.py              # Pair / Triplet / CE 三种 Dataset
@@ -200,7 +212,7 @@ python evals/gate.py    # 本地复跑（纯 numpy 确定性，零模型权重�
 ├── eval_retrieval.py           # 检索质量评测
 ├── faq_answer.py               # 命令行交互问答（--no-hybrid / --no-onnx 教学对比）
 ├── smoke_test.py               # 零依赖冒烟自检
-├── tests/                      # 81 用例，7 个测试模块
+├── tests/                      # 98 用例，9 个测试模块
 └── data/                       # 基线数据集（432 句对）+ 扩容数据集（4970 句对）
 ```
 
