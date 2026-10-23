@@ -20,6 +20,9 @@ src/data/
 data/feedback/
 *.json.bak
 
+# ── 运行期审计日志（P4 管理操作 JSONL 留痕，只增不改） ────
+logs/
+
 # ── 环境与本地配置（含 API Key，绝不入库） ────────────────
 .env
 .env.local

@@ -38,6 +38,7 @@ def client(tmp_path, monkeypatch, fake_dense):
     kb_file = tmp_path / "kb.json"
     kb_file.write_text(json.dumps(KB, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("BP_KB", str(kb_file))       # load_kb/rebuild_index 走临时库
+    monkeypatch.setenv("BP_AUDIT_PATH", str(tmp_path / "audit.jsonl"))  # P4：管理端点审计重定向临时目录，测试零仓库污染
 
     import serve
     serve.S.update(

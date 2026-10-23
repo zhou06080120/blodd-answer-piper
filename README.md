@@ -79,6 +79,7 @@ cp .env.example .env
 # 可选：DEEPSEEK_API_KEY（数据合成用，不配置自动降级离线模板合成）
 # BP_BERT_PATH 指向本地 bert-base-chinese 目录
 # RATE_LIMIT_RPM 请求限流：每分钟每 IP 上限（默认 60，设 0 关闭）
+# BP_API_KEYS / BP_ADMIN_KEYS 双级 API Key 鉴权（P4，不配置全放行）
 ```
 
 请求限流为内置中间件（`src/rate_limit.py`，纯标准库滑动窗口）：默认每 IP 每分钟 60 次请求，超限返回 429 + `Retry-After`；`/health` 探针豁免。
@@ -119,7 +120,7 @@ docker run -p 8000:8000 \
 ## 测试与质量
 
 ```bash
-pytest          # 98 用例，覆盖率 79%（门槛 30%，内置于 pyproject）
+pytest          # 108 用例，覆盖率 79%（门槛 30%，内置于 pyproject）
 ruff check .    # lint
 ```
 
@@ -158,6 +159,45 @@ ruff check .    # lint
 | **不做注入拦截** | 纯检索服务无 LLM 生成，天然免疫 Prompt 注入，仅做输入校验；模块内 `check_injection()` 供 LLM 生成类姊妹项目复用 |
 | **密钥零硬编码** | API Key 等敏感配置仅经环境变量注入（`.env.example` 逐项注释说明），`.env` 已被 .gitignore 排除，仓库零密钥落盘 |
 
+## P4 平台安全
+
+`src/auth.py` + `src/audit.py`（P4）：API 双级 Key 鉴权 + 管理操作审计留痕，纯标准库实现，未配置 Key 时零开销放行（本地开发/测试零影响）。
+
+**双级 Key**（环境变量逗号分隔多个；`BP_API_KEYS` / `BP_ADMIN_KEYS` 均不配置 = 本地开发模式全放行，仅记 warning）：
+
+| Key | 环境变量 | 权限 |
+|---|---|---|
+| 普通 Key | `BP_API_KEYS` | 业务端点（`/query`、`/stats`、`/annotations` 查看、`/iterate` 预览） |
+| 管理 Key | `BP_ADMIN_KEYS` | 隐含普通权限，额外可调用下方管理端点 |
+
+配置后除 `/health`、`/metrics`、`/` 与 OPTIONS 预检外，所有请求必须携带 `X-API-Key` 请求头：缺失或错误统一返回 401（不区分两种情况，防探测）；通过后中间件在 `request.state` 写入 `api_role`（user/admin）与 `actor_id`（Key 的 SHA-256 前 8 位指纹，审计脱敏用）。中间件注册顺序（洋葱模型）：observability（最外层，401/403/429 全被指标统计）→ rate_limit → auth（最内层）——限流先于鉴权执行，防 Key 暴力枚举。
+
+**管理端点**（`require_admin` 守卫：鉴权启用时非管理 Key 返回 403；每个写操作同时落一条审计）：
+
+| 端点 | 功能 | 审计 action |
+|---|---|---|
+| `POST /annotations/{rid}` | 标注流转（attach / new_intent / reject） | `annotate` |
+| `POST /iterate/apply` | 达标簇 → draft FAQ（灰度） | `iterate_apply` |
+| `POST /admin/promote` | 灰度转正 + 持锁重建索引 | `promote_gray` |
+| `POST /admin/refresh` | 重载 KB + 重建索引 | `admin_refresh` |
+
+```bash
+# 管理 Key 调用灰度转正（普通 Key → 403；无 Key → 401）
+curl -X POST localhost:8000/admin/promote \
+     -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+     -d '{"faq_ids": [4, 5]}'
+```
+
+**审计日志**（`src/audit.py`）：上述管理写操作全部经 `record_audit()` 追加写 JSONL（默认 `logs/audit.jsonl`，`BP_AUDIT_PATH` 可覆盖；目录缺失自愈；线程安全单行追加）。每行字段：
+
+| 字段 | 说明 |
+|---|---|
+| `ts` | 本地时区时间戳（ISO 8601 秒级） |
+| `actor` | 操作者 Key 指纹（SHA-256 前 8 位，不落明文；未鉴权 `-`） |
+| `action` / `target` | 动作名（上表） / 操作对象 id（如队列记录 id、FAQ id 列表、KB 路径） |
+| `detail` | 关键参数摘要（如 `{"action": "attach", "faq_id": 1}`；迭代类只记"触发"动作，不追踪任务完成） |
+| `request_id` | 关联请求编号（与 `X-Request-ID` 响应头、结构化日志同源串联） |
+
 ## 评估门禁
 
 `evals/gate.py` + `evals/thresholds.json`（P2）：BM25-only **变体留出（hold-out）检索门禁**——每个 FAQ 从 `variants` 末尾留出 2 条作查询（不在语料中，无泄漏），其余变体 + 标准问作语料建 BM25 索引（当前 60 查询 × 1015 语料，30 FAQ），统计 Top1/Top3 的 FAQ 命中率；门禁断言实测 ≥ 阈值，任一 FAIL 退出码 1，CI 在 test 与 docker 之间以 `eval-gate` job 拦截。阈值文件同时绑定 `holdout_per_faq` / `queries` 口径，防止悄悄稀释评测集。
@@ -178,14 +218,16 @@ python evals/gate.py    # 本地复跑（纯 numpy 确定性，零模型权重�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/query` | 在线问答；低置信自动拦截入队并返回兜底话术 |
-| GET | `/health` | 健康检查（编码后端 / 索引规模） |
+| GET | `/health` | 健康检查（编码后端 / 索引规模；鉴权豁免） |
 | GET | `/stats` | 可观测性（命中贡献 / 分阶段延迟 / P95 / 队列水位） |
 | GET | `/annotations` | 待标注队列（低置信样本明细） |
-| POST | `/annotations/{rid}` | 标注流转：attach 挂靠 FAQ / new_intent / reject |
+| POST | `/annotations/{rid}` | 标注流转：attach 挂靠 FAQ / new_intent / reject（管理 Key，审计 `annotate`） |
 | GET | `/iterate` | 聚类预览：高频未知意图簇（只读） |
-| POST | `/iterate/apply` | 达标簇 → draft FAQ（灰度，不入在线索引） |
-| POST | `/admin/promote` | draft/gray → active 并持锁重建索引 |
-| POST | `/admin/refresh` | 重载 KB + 重建混合检索索引 |
+| POST | `/iterate/apply` | 达标簇 → draft FAQ（灰度，不入在线索引；管理 Key，审计 `iterate_apply`） |
+| POST | `/admin/promote` | draft/gray → active 并持锁重建索引（管理 Key，审计 `promote_gray`） |
+| POST | `/admin/refresh` | 重载 KB + 重建混合检索索引（管理 Key，审计 `admin_refresh`） |
+
+> 配置 `BP_API_KEYS` / `BP_ADMIN_KEYS` 后全端点（豁免 `/health` `/metrics` `/`）需携带 `X-API-Key`，详见「P4 平台安全」。
 
 ## 项目结构
 
@@ -196,6 +238,8 @@ python evals/gate.py    # 本地复跑（纯 numpy 确定性，零模型权重�
 │   ├── active_learning.py      # 标注队列 / 意图聚类 / draft 生成 / 灰度转正
 │   ├── onnx_runtime.py         # ONNX 导出 + INT8 量化 + 双后端编码器工厂
 │   ├── compliance.py           # 医疗合规：统一免责声明 + 输入校验（纯标准库）
+│   ├── auth.py                 # P4 双级 Key 鉴权：中间件 + require_admin 管理守卫
+│   ├── audit.py                # P4 审计留痕：管理操作 JSONL 追加写（BP_AUDIT_PATH）
 │   ├── llm_synth.py            # LLM / 离线模板双通道数据合成
 │   ├── model.py                # BiEncoder / CrossEncoder 定义
 │   ├── dataset.py              # Pair / Triplet / CE 三种 Dataset
@@ -212,7 +256,7 @@ python evals/gate.py    # 本地复跑（纯 numpy 确定性，零模型权重�
 ├── eval_retrieval.py           # 检索质量评测
 ├── faq_answer.py               # 命令行交互问答（--no-hybrid / --no-onnx 教学对比）
 ├── smoke_test.py               # 零依赖冒烟自检
-├── tests/                      # 98 用例，9 个测试模块
+├── tests/                      # 108 用例，11 个测试模块
 └── data/                       # 基线数据集（432 句对）+ 扩容数据集（4970 句对）
 ```
 

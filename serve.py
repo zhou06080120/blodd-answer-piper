@@ -15,6 +15,7 @@
   python -m uvicorn serve:app --host 0.0.0.0 --port 8000
 环境变量（可选）：
   BP_KB  BP_BERT_PATH  BP_THRESHOLD(默认0.82)  BP_TOP_K(默认3)
+  BP_API_KEYS/BP_ADMIN_KEYS（双级 Key 鉴权，均不配=本地开发放行）BP_AUDIT_PATH（审计日志）
 
 依赖：fastapi / uvicorn / torch / transformers / onnxruntime
 """
@@ -38,11 +39,13 @@ SRC = ROOT / "src"                                 # 源码目录
 sys.path.insert(0, str(SRC))                      # 注入 src/ 到模块搜索路径最前
 
 import torch  # noqa: E402                         # 深度学习框架（改路径后导入，豁免 E402）
-from fastapi import FastAPI, HTTPException  # noqa: E402  # Web 框架与可控异常（自动转 4xx 响应）
+from fastapi import Depends, FastAPI, HTTPException, Request  # noqa: E402  # Web 框架、可控异常、路由依赖与请求对象（P4 管理守卫/审计注入）
 from fastapi.responses import JSONResponse  # noqa: E402  # 400 校验响应体（detail 与 HTTPException 同构）
 from pydantic import BaseModel  # noqa: E402        # 请求体模型（自动校验/序列化）
 
 from active_learning import ActiveLearning, AnnotationQueue, IntentClustering  # noqa: E402  # 主动学习闭环三件套：迭代编排/标注队列/意图聚类
+from audit import record_audit  # noqa: E402  # P4 审计留痕：管理操作 JSONL 追加写（BP_AUDIT_PATH 可覆盖路径）
+from auth import install_auth, require_admin  # noqa: E402  # P4 双级 Key 鉴权：中间件安装入口 + require_admin 管理端点守卫
 from compliance import MEDICAL_DISCLAIMER, ComplianceError, validate_query  # noqa: E402  # P3 医疗合规：统一免责声明 + 输入校验（检索服务不做注入拦截）
 from hybrid_retriever import HybridRetriever  # noqa: E402   # 两阶段混合检索器
 from observability import install_observability, setup_logging  # noqa: E402  # P2 可观测性：结构化日志初始化 + 最外层指标中间件 + /metrics 端点
@@ -191,10 +194,22 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="血压计 FAQ 智能问答服务", lifespan=lifespan)  # 创建应用实例并挂载生命周期钩子
+install_auth(app)  # P4 鉴权中间件（最内层）：读 BP_API_KEYS/BP_ADMIN_KEYS，未配置不注册（本地开发放行）
 install_rate_limit(app)  # 注册按 IP 滑动窗口限流中间件（RATE_LIMIT_RPM 默认 60/min，0=关闭；/health 探针豁免）
 install_observability(app)  # 注册可观测中间件（最外层：X-Request-ID + Prometheus 指标 + /metrics 端点）。
-# ↑ 注册顺序关键：FastAPI 后注册的 HTTP 中间件位于外层，限流 429 响应也会流经本中间件，
-#   被 http_requests_total{status="429"} 与 rate_limit_rejected_total 统计到。
+# ↑ 注册顺序关键（FastAPI 后注册的 HTTP 中间件位于洋葱外层）：请求流向 observability →
+#   rate_limit → auth → 路由。限流先于鉴权执行可防 Key 暴力枚举；鉴权 401/403 与限流
+#   429 全部流经最外层中间件，被 http_requests_total{status=...} 与结构化日志统计到。
+
+
+# ── P4 管理端点守卫（require_admin 的依赖注入适配层）────────────────────────
+
+# auth.require_admin 的 request 形参无类型注解，直接作 Depends(require_admin) 会被
+# FastAPI 解析成 query 参数（恒 422）；这里用带 Request 注解的同语义薄包装正确注入
+# 请求对象后原样调用——拦截/放行逻辑全在 auth.require_admin 内，本层零业务。
+async def require_admin_dep(request: Request) -> None:
+    """管理端点路由依赖：鉴权启用时非 admin 抛 403；未启用放行（向后兼容）。"""
+    require_admin(request)
 
 
 # ── 在线问答 ─────────────────────────────────────────────────────────────────
@@ -290,13 +305,14 @@ def annotations(status: str | None = None, limit: int = 50):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 路由：POST /annotations/{rid} —— 标注流转
+# 路由：POST /annotations/{rid} —— 标注流转（管理写操作）
 # 功能：把一条待标注记录按 action 处理（attach 并入既有 FAQ / new_intent 判新 /
 #       reject 拒绝）；attach 成功后自动把问法并回 KB（知识沉淀）
 # 输入：rid=记录 id；LabelIn（action + 可选 faq_id）　输出：{ok, ...}
+# 安全：P4——require_admin 守卫（非管理 Key 403）+ record_audit 审计留痕
 # ═══════════════════════════════════════════════════════════════════════════
-@app.post("/annotations/{rid}")
-async def label(rid: str, body: LabelIn):
+@app.post("/annotations/{rid}", dependencies=[Depends(require_admin_dep)])
+async def label(rid: str, body: LabelIn, request: Request):
     if body.action == "attach":                       # 动作一：挂到既有 FAQ
         if body.faq_id is None:                        # attach 必须指明目标 FAQ
             raise HTTPException(400, "attach 需要 faq_id")  # 缺参返回 400
@@ -314,6 +330,9 @@ async def label(rid: str, body: LabelIn):
         r = next((x for x in rows if x["id"] == rid), None)  # 定位刚处理的那条记录
         if r:                                          # 找到了
             extra = _attach_variant(r["query"], body.faq_id)  # 把原问法并入目标 FAQ 的 variants
+    record_audit("annotate", target=rid,              # P4 审计：谁在何时对哪条队列记录做了何种流转
+                 detail={"action": body.action, "faq_id": body.faq_id},
+                 actor=getattr(request.state, "actor_id", "-"))  # 操作者指纹（未鉴权时 "-"）
     return {"ok": True, **extra}                      # 返回成功 + 并库结果
 
 
@@ -355,43 +374,59 @@ async def iterate_preview():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 路由：POST /iterate/apply —— 达标簇落地为 draft FAQ（灰度）
+# 路由：POST /iterate/apply —— 达标簇落地为 draft FAQ（灰度）（管理写操作）
 # 功能：聚类后把达标簇建成 draft 状态的新 FAQ（不参与在线检索），待人工审核
 # 输入：无　输出：新建 draft 列表 + 审核提示
+# 安全：P4——require_admin 守卫（非管理 Key 403）+ record_audit 审计"触发"动作
+#       （长任务只记触发，不追踪任务完成）
 # ═══════════════════════════════════════════════════════════════════════════
-@app.post("/iterate/apply")
-async def iterate_apply():
+@app.post("/iterate/apply", dependencies=[Depends(require_admin_dep)])
+async def iterate_apply(request: Request):
     pending = S["queue"].list("pending")               # 取待标注记录
     clu = IntentClustering()                           # 聚类器
     summary = await asyncio.to_thread(clu.cluster, pending, S["dense_enc"].encode)  # 线程池执行聚类
     learner = ActiveLearning(kb_path=S["kb_path"], queue=S["queue"])  # 迭代编排器（KB+队列）
     created = await asyncio.to_thread(learner.apply_clusters, summary)  # 达标簇 → draft FAQ 落库
+    record_audit("iterate_apply",                     # P4 审计：记录"触发落地"这个动作本身
+                 target=",".join(str(f["id"]) for f in created) or "-",  # 新建 draft 的编号列表
+                 detail={"pending": len(pending), "created_drafts": [f["id"] for f in created]},
+                 actor=getattr(request.state, "actor_id", "-"))  # 操作者指纹（未鉴权时 "-"）
     return {"created_drafts": [{"id": f["id"], "question": f["question"]}
                                for f in created],      # 返回新建 draft 的编号与标准问
             "note": "draft 不参与在线检索，审核后调用 /admin/promote 灰度转正"}  # 提示后续流程
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 路由：POST /admin/promote —— 灰度转正（draft/gray → active）并重建索引
+# 路由：POST /admin/promote —— 灰度转正（draft/gray → active）并重建索引（管理写操作）
 # 输入：PromoteIn（faq_ids 列表）　输出：转正明细 + 新索引规模
+# 安全：P4——require_admin 守卫（非管理 Key 403）+ record_audit 审计留痕
 # ═══════════════════════════════════════════════════════════════════════════
-@app.post("/admin/promote")
-async def promote(body: PromoteIn):
+@app.post("/admin/promote", dependencies=[Depends(require_admin_dep)])
+async def promote(body: PromoteIn, request: Request):
     learner = ActiveLearning(kb_path=S["kb_path"], queue=S["queue"])  # 迭代编排器
     done = await asyncio.to_thread(learner.promote, body.faq_ids)  # 执行状态流转（落盘）
     async with S["lock"]:                              # 持锁重建索引，避免并发刷新冲突
         await asyncio.to_thread(rebuild_index)        # 线程池执行重建（重读 KB + 重新编码）
+    record_audit("promote_gray",                      # P4 审计：灰度转正了哪些 FAQ
+                 target=",".join(map(str, body.faq_ids)),  # 操作对象 id（FAQ 编号列表）
+                 detail={"faq_ids": body.faq_ids, "promoted": done, "index_size": S["retriever"].n},
+                 actor=getattr(request.state, "actor_id", "-"))  # 操作者指纹（未鉴权时 "-"）
     return {"promoted": done, "index_rebuilt": True, "index_size": S["retriever"].n}  # 返回转正结果与新索引规模
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 路由：POST /admin/refresh —— 手动重载 KB + 重建索引（KB 被外部编辑后调用）
+# 路由：POST /admin/refresh —— 手动重载 KB + 重建索引（KB 被外部编辑后调用）（管理写操作）
 # 输入：无　输出：{ok, index_size, kb_size}
+# 安全：P4——require_admin 守卫（非管理 Key 403）+ record_audit 审计留痕
 # ═══════════════════════════════════════════════════════════════════════════
-@app.post("/admin/refresh")
-async def refresh():
+@app.post("/admin/refresh", dependencies=[Depends(require_admin_dep)])
+async def refresh(request: Request):
     async with S["lock"]:                              # 持锁防止与 promote 并发重建
         await asyncio.to_thread(rebuild_index)        # 线程池执行重读+重建
+    record_audit("admin_refresh",                     # P4 审计：手动刷新索引（KB 被外部编辑后）
+                 target=str(S.get("kb_path", "")),    # 操作对象：当前生效的 KB 文件路径
+                 detail={"kb_size": len(S["kb"]), "index_size": S["retriever"].n},
+                 actor=getattr(request.state, "actor_id", "-"))  # 操作者指纹（未鉴权时 "-"）
     return {"ok": True, "index_size": S["retriever"].n,
             "kb_size": len(S["kb"])}                  # 返回新索引与 KB 规模
 
