@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# ═══════════════════════════════════════════════════════════════════
+# 血压计 FAQ 语义检索引擎 —— 项目元数据与依赖声明
+# 本项目为平铺模块架构（src/*.py 无包结构 + 根目录管线脚本），
+# 采用"虚包"安装模式：
+#   pip install -e .            → 只安装在线服务依赖（不含 torch）
+#   pip install -e ".[train]"   → 附加训练全家桶（torch/transformers 等，约 2GB+）
+#   pip install -e ".[dev]"     → 附加 pytest / ruff 等开发工具链
+#
+# 测试策略：单测只覆盖"torch-free 核心模块 + serve 在线服务"
+# （hybrid_retriever / llm_synth / active_learning / onnx_runtime 纯函数部分 /
+#   dataset 数据逻辑 / serve 端点），torch/transformers 重模型路径
+# 由训练与集成环境覆盖，CI 预装 CPU torch 保证 serve 可导入。
+# ═══════════════════════════════════════════════════════════════════
+
+[project]
+name = "blodd-answer-piper"
+version = "1.0.0"
+description = "血压计 FAQ 语义检索引擎：SBERT 双塔（难负例训练）+ CrossEncoder 精排 + BM25/Dense/RRF 混合检索、ONNX INT8 量化部署、低置信拦截与主动学习闭环的 FastAPI 在线服务"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "zhou06080120" }]
+keywords = ["semantic-search", "sbert", "cross-encoder", "onnx", "int8-quantization", "rag", "active-learning", "faq"]
+dependencies = [
+    "numpy>=1.24.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+    "onnxruntime>=1.17.0,<1.31",  # 1.31 wheel 在部分 Windows 主机上 import 即访问违例，实测 1.20 稳定
+    "onnx>=1.15.0",
+    "openai>=1.30.0",
+    "tqdm>=4.66.0",
+    "scikit-learn>=1.3.0",
+]
+
+[project.optional-dependencies]
+train = [
+    "torch>=2.1.0",
+    "transformers>=4.38.0",
+    "matplotlib>=3.7.0",
+    "datasets>=2.18.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "httpx>=0.27",
+]
+
+[tool.setuptools]
+# 虚包模式：不打包任何 Python 模块，pip install -e . 仅注册元数据与依赖
+py-modules = []
+
+# ═══════════════════════════════════════════════════════════════════
+# pytest：src 平铺模块 + 根目录 serve.py 通过 pythonpath 直接 import
+# 覆盖率门槛 30%：与 CI 门禁保持一致
+# ═══════════════════════════════════════════════════════════════════
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+addopts = [
+    "--cov=llm_synth",
+    "--cov=hybrid_retriever",
+    "--cov=active_learning",
+    "--cov=onnx_runtime",
+    "--cov=dataset",
+    "--cov=serve",
+    "--cov-report=term-missing",
+    "--cov-fail-under=30",
+]
+
+# ═══════════════════════════════════════════════════════════════════
+# ruff：默认规则集（E4/E7/E9/F），与前两个姊妹项目口径一致
+# ═══════════════════════════════════════════════════════════════════
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.coverage.run]
+omit = [
+    "*/__pycache__/*",
+]

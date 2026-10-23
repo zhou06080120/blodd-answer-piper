@@ -1,0 +1,54 @@
+{
+  "seed_faqs": 30,
+  "kb_questions": 1075,
+  "avg_variants_per_faq": 34.8,
+  "source": {
+    "llm": 0,
+    "offline": 0,
+    "cache": 30
+  },
+  "splits": {
+    "train": {
+      "pairs": 4970,
+      "pos": 3600,
+      "neg": 1370,
+      "faqs": 24
+    },
+    "validation": {
+      "pairs": 606,
+      "pos": 450,
+      "neg": 156,
+      "faqs": 3
+    },
+    "test": {
+      "pairs": 626,
+      "pos": 450,
+      "neg": 176,
+      "faqs": 3
+    }
+  },
+  "elapsed_s": 9.7,
+  "args": {
+    "faq": "f:\\aaa123\\user0000\\blodd_answer_piper\\data\\blood_pressure\\faq.json",
+    "out_dir": "f:\\aaa123\\user0000\\blodd_answer_piper\\data\\blood_pressure_expanded",
+    "ckpt": "f:\\aaa123\\user0000\\blodd_answer_piper\\outputs\\checkpoints\\biencoder_cosine_best.pt",
+    "bert_path": "F:\\aaa123\\pretrain_models\\bert-base-chinese",
+    "target_variants": 35,
+    "llm_para": 30,
+    "llm_neg": 10,
+    "filter_sim": 0.78,
+    "neg_min_sim": 0.3,
+    "neg_max_sim": 0.85,
+    "pos_cap": 150,
+    "pos_min_sim": 0.7,
+    "hard_neg": 10,
+    "hard_neg_min": 0.45,
+    "hard_neg_max": 0.92,
+    "boundary_neg": 10,
+    "random_neg": 40,
+    "seed": 42,
+    "no_llm": false,
+    "force_llm": false,
+    "fresh": false
+  }
+}
