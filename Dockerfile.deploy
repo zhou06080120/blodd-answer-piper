@@ -48,6 +48,9 @@ COPY data ./data
 # 训练产物（构建期已从 HF 模型仓拉到 builder 层 /models/outputs）
 COPY --from=builder /models/outputs ./outputs
 
+# appuser 写权限：serve.py 启动时需在 src/data/feedback 建目录（标注队列落盘）
+RUN chown -R appuser:appuser /app
+
 USER appuser
 
 # 与根 Dockerfile 的差异：BP_BERT_PATH 指向镜像内路径 + PORT 平台适配
