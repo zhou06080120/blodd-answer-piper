@@ -1,0 +1,67 @@
+# ═══════════════════════════════════════════════════════════════════
+# 服务器本地模型版（Dockerfile.server）：
+#   模型经 scp 预先放入 build context 的 models/ 目录，构建期纯 COPY，零外网依赖。
+#   用于国内服务器（HF 直连/镜像均不稳）的救火部署。
+# 与 Dockerfile.deploy 的区别：仅删除两个"构建期从 HF 下载"的 RUN，
+#   阶段 1 其余指令完全一致 → 公网可达时可复用相同基座。
+# 用法（服务器）：
+#   1. scp -r server_deploy/models /opt/bp-ai/blodd/   # 首次部署上传模型
+#   2. docker build -f Dockerfile.server -t bp/blodd /opt/bp-ai/blodd
+#   3. docker run -d --name blodd --restart unless-stopped -p 8003:8000 \
+#        -e RATE_LIMIT_RPM=20 bp/blodd
+# ═══════════════════════════════════════════════════════════════════
+
+# ── 阶段 1：依赖（与 Dockerfile.deploy 一致）──────────────────────────────
+FROM python:3.12-slim AS builder
+
+ARG HF_ENDPOINT=https://huggingface.co
+ENV HF_ENDPOINT=${HF_ENDPOINT}
+
+WORKDIR /build
+COPY pyproject.toml README.md ./
+RUN pip install --no-cache-dir --target=/deps .
+
+# CPU 版 torch + transformers（与根 Dockerfile 同款最小模型栈）
+RUN pip install --no-cache-dir --target=/deps torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir --target=/deps "transformers>=4.38.0"
+
+# ── 阶段 2：运行时镜像 ───────────────────────────────────────────────────────
+FROM python:3.12-slim
+
+RUN useradd --create-home --uid 1000 appuser
+
+WORKDIR /app
+COPY --from=builder /deps /deps
+
+# 模型：本地 models/ 直拷（bert-base-chinese safetensors + 训练产物最小部署集）
+# 目录结构（由本地 server_deploy/models/ 经 scp 上传）：
+#   models/bert-base-chinese/{config.json, model.safetensors, tokenizer.json, tokenizer_config.json, vocab.txt}
+#   models/outputs/checkpoints/{biencoder_hardneg_best.pt, crossencoder_best.pt}
+#   models/outputs/onnx/biencoder_hardneg_best_int8.onnx
+COPY models/bert-base-chinese /models/bert-base-chinese
+COPY models/outputs ./outputs
+
+COPY serve.py ./
+COPY index.html ./
+COPY src ./src
+COPY data ./data
+
+# appuser 写权限：serve.py 启动时需在 src/data/feedback 建目录（标注队列落盘）
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+# 与根 Dockerfile 的差异：BP_BERT_PATH 指向镜像内路径 + PORT 平台适配
+ENV PYTHONPATH=/deps \
+    PYTHONUNBUFFERED=1 \
+    BP_BERT_PATH=/models/bert-base-chinese \
+    PORT=8000
+
+EXPOSE 8000
+
+# 冷启动需加载 ONNX 会话 + 全库 Dense 编码建索引，start-period 放宽 90s
+HEALTHCHECK --interval=30s --timeout=8s --start-period=90s --retries=3 \
+    CMD python -c 'import os,urllib.request; urllib.request.urlopen("http://127.0.0.1:%s/health" % os.environ.get("PORT","8000"), timeout=6)'
+
+# shell 形式以读取 $PORT（平台注入时生效，本地回落 8000）
+CMD python -m uvicorn serve:app --host 0.0.0.0 --port ${PORT:-8000}

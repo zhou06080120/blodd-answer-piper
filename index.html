@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>血压计 FAQ 语义检索引擎</title>
+<style>
+  :root {
+    --primary: #1a73e8; --primary-dark: #1557b0;
+    --green: #188038; --green-bg: #e6f4ea;
+    --orange: #e8710a; --orange-bg: #fef7e0;
+    --gray: #5f6368; --border: #dadce0; --bg: #f8f9fa;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: #202124; min-height: 100vh; display: flex; flex-direction: column; }
+  header { background: #fff; border-bottom: 1px solid var(--border); padding: 20px 24px; }
+  .wrap { max-width: 860px; margin: 0 auto; width: 100%; }
+  h1 { font-size: 20px; font-weight: 600; }
+  .sub { font-size: 13px; color: var(--gray); margin-top: 4px; }
+  .pipeline { font-size: 12px; color: var(--gray); margin-top: 8px; font-family: Consolas, monospace; }
+  .pipeline b { color: var(--primary); font-weight: 600; }
+  main { flex: 1; padding: 24px; }
+  .search-box { display: flex; gap: 10px; }
+  .search-box input { flex: 1; padding: 12px 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 15px; outline: none; background: #fff; }
+  .search-box input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(26,115,232,.15); }
+  .search-box button { padding: 12px 28px; background: var(--primary); color: #fff; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; white-space: nowrap; }
+  .search-box button:hover { background: var(--primary-dark); }
+  .search-box button:disabled { background: #9aa0a6; cursor: not-allowed; }
+  .examples { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .examples button { padding: 5px 12px; font-size: 13px; background: #fff; border: 1px solid var(--border); border-radius: 16px; color: var(--gray); cursor: pointer; }
+  .examples button:hover { border-color: var(--primary); color: var(--primary); }
+  .meta { margin-top: 10px; font-size: 12px; color: var(--gray); font-family: Consolas, monospace; }
+  .result { margin-top: 24px; display: none; }
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; margin-bottom: 12px; }
+  .badge.hit { background: var(--green-bg); color: var(--green); }
+  .badge.block { background: var(--orange-bg); color: var(--orange); }
+  .q-std { font-size: 14px; color: var(--gray); margin-bottom: 6px; }
+  .q-std b { color: #202124; }
+  .answer { font-size: 15px; line-height: 1.8; }
+  .conf-row { margin-top: 14px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--gray); }
+  .bar { width: 180px; height: 6px; background: #e8eaed; border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; }
+  .candidates { margin-top: 18px; border-top: 1px dashed var(--border); padding-top: 14px; }
+  .candidates h3 { font-size: 13px; color: var(--gray); font-weight: 600; margin-bottom: 10px; }
+  .cand-item { display: flex; justify-content: space-between; padding: 6px 10px; font-size: 13px; border-radius: 6px; }
+  .cand-item:first-of-type { background: #f1f3f4; }
+  .cand-item .c { color: var(--gray); font-family: Consolas, monospace; }
+  .block-note { margin-top: 12px; font-size: 13px; color: var(--orange); background: var(--orange-bg); padding: 10px 12px; border-radius: 8px; line-height: 1.6; }
+  .error { margin-top: 24px; display: none; background: #fce8e6; color: #c5221f; padding: 12px 16px; border-radius: 8px; font-size: 14px; }
+  footer { background: #fff; border-top: 1px solid var(--border); padding: 16px 24px; }
+  .disclaimer { font-size: 12px; color: var(--gray); line-height: 1.7; text-align: center; }
+  .disclaimer .ai { display: inline-block; margin-bottom: 6px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; }
+  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: r .7s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes r { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>血压计 FAQ 语义检索引擎</h1>
+    <div class="sub">BM25 稀疏 + Dense 语义双路召回 → RRF 融合 → CrossEncoder 精排，双闸门置信度，未过阈值拒答转人工</div>
+    <div class="pipeline">链路：<b>BM25</b> ┐&nbsp;&nbsp;┌ <b>Dense (ONNX INT8)</b>&nbsp;&nbsp;→&nbsp;&nbsp;<b>RRF</b> → <b>CE 精排</b> → 置信度 ≥ <b id="th">0.82</b> 放行 / &lt; 阈值拦截入队</div>
+  </div>
+</header>
+<main>
+  <div class="wrap">
+    <div class="search-box">
+      <input id="q" type="text" maxlength="500" placeholder="输入血压计使用 / 故障 / 型号问题，例如：袖带绑在什么位置？" autocomplete="off">
+      <button id="go" onclick="doQuery()">查询</button>
+    </div>
+    <div class="examples" id="ex"></div>
+    <div class="meta" id="meta"></div>
+    <div class="result" id="result"></div>
+    <div class="error" id="error"></div>
+  </div>
+</main>
+<footer>
+  <div class="wrap disclaimer">
+    <span class="ai">以上内容由 AI 生成</span><br>
+    本回答仅供健康教育参考，不能替代执业医师诊疗意见；如有不适或异常读数，请及时就医。
+  </div>
+</footer>
+<script>
+const EXAMPLES = ["血压计袖带绑在什么位置", "HEM-7156 显示 E1 错误码怎么办", "每次测量的结果都不一样正常吗", "血压计需要定期校准吗", "什么时间测血压最准确"];
+
+const $ = id => document.getElementById(id);
+const esc = s => (s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+// 页面加载：拉 /health 展示后端信息（冷启动 90s 内可能未就绪，静默降级）
+fetch("/health").then(r => r.json()).then(h => {
+  $("meta").textContent = `[backend] dense=${h.dense_backend} · KB ${h.kb_size} 条 FAQ · 索引 ${h.index_size} 个候选问法`;
+  if (h.threshold) $("th").textContent = h.threshold;
+}).catch(() => { $("meta").textContent = ""; });
+
+EXAMPLES.forEach(t => {
+  const b = document.createElement("button");
+  b.textContent = t;
+  b.onclick = () => { $("q").value = t; doQuery(); };
+  $("ex").appendChild(b);
+});
+
+$("q").addEventListener("keydown", e => { if (e.key === "Enter") doQuery(); });
+
+async function doQuery() {
+  const q = $("q").value.trim();
+  if (!q) { $("q").focus(); return; }
+  $("go").disabled = true; $("go").innerHTML = '<span class="spin"></span>检索中';
+  $("result").style.display = "none"; $("error").style.display = "none";
+  const t0 = performance.now();
+  try {
+    const r = await fetch("/query", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: q, top_k: 3 })
+    });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${r.status}`); }
+    render(await r.json(), performance.now() - t0);
+  } catch (e) {
+    $("error").textContent = "查询失败：" + e.message;
+    $("error").style.display = "block";
+  } finally {
+    $("go").disabled = false; $("go").textContent = "查询";
+  }
+}
+
+function render(d, uiMs) {
+  const hit = d.matched;
+  const pct = Math.round((d.confidence ?? 0) * 100);
+  const color = hit ? "var(--green)" : "var(--orange)";
+  const cands = (d.candidates || []).map(c =>
+    `<div class="cand-item"><span>${esc(c.question)}</span><span class="c">${(c.confidence * 100).toFixed(1)}%</span></div>`
+  ).join("");
+  $("result").innerHTML = `
+    <div class="card">
+      <span class="badge ${hit ? "hit" : "block"}">${hit ? "✓ 检索命中" : "⚠ 低置信拦截"}</span>
+      ${hit ? `<div class="q-std">命中标准问：<b>${esc(d.question)}</b></div>` : ""}
+      <div class="answer">${esc(d.answer)}</div>
+      <div class="conf-row">
+        <span>综合置信度</span>
+        <div class="bar"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+        <span style="font-family:Consolas,monospace;color:${color}">${pct}%</span>
+        <span>（阈值 ${Math.round((d.threshold ?? 0.82) * 100)}%）</span>
+      </div>
+      ${cands ? `<div class="candidates"><h3>Top-${d.candidates.length} 候选（RRF 融合 + CE 精排）</h3>${cands}</div>` : ""}
+      ${hit ? "" : `<div class="block-note">该问法置信度未过阈值，已自动拦截并转入待标注队列——将进入「意图聚类 → draft FAQ → 灰度转正」的主动学习闭环。建议换个问法重试，或转人工客服。</div>`}
+      <div class="conf-row" style="margin-top:12px">服务端耗时 <span style="font-family:Consolas,monospace">${d.elapsed_ms} ms</span>${d.faq_id != null ? ` · FAQ #${d.faq_id}` : ""}</div>
+    </div>`;
+  $("result").style.display = "block";
+}
+</script>
+</body>
+</html>

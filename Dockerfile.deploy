@@ -43,6 +43,7 @@ COPY --from=builder /deps /deps
 COPY --from=builder /models /models
 
 COPY serve.py ./
+COPY index.html ./
 COPY src ./src
 COPY data ./data
 # 训练产物（构建期已从 HF 模型仓拉到 builder 层 /models/outputs）

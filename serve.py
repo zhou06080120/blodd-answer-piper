@@ -40,7 +40,7 @@ sys.path.insert(0, str(SRC))                      # 注入 src/ 到模块搜索�
 
 import torch  # noqa: E402                         # 深度学习框架（改路径后导入，豁免 E402）
 from fastapi import Depends, FastAPI, HTTPException, Request  # noqa: E402  # Web 框架、可控异常、路由依赖与请求对象（P4 管理守卫/审计注入）
-from fastapi.responses import JSONResponse  # noqa: E402  # 400 校验响应体（detail 与 HTTPException 同构）
+from fastapi.responses import FileResponse, JSONResponse  # noqa: E402  # 前端首页静态文件 + 400 校验响应体（detail 与 HTTPException 同构）
 from pydantic import BaseModel  # noqa: E402        # 请求体模型（自动校验/序列化）
 
 from active_learning import ActiveLearning, AnnotationQueue, IntentClustering  # noqa: E402  # 主动学习闭环三件套：迭代编排/标注队列/意图聚类
@@ -210,6 +210,17 @@ install_observability(app)  # 注册可观测中间件（最外层：X-Request-I
 async def require_admin_dep(request: Request) -> None:
     """管理端点路由依赖：鉴权启用时非 admin 抛 403；未启用放行（向后兼容）。"""
     require_admin(request)
+
+
+# ── 前端首页 ─────────────────────────────────────────────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 路由：GET / —— Web UI（单文件静态页：查询框 + 置信度展示 + 候选列表 + 免责声明）
+# 说明：鉴权豁免路径含 "/"（src/auth.py DEFAULT_EXEMPT_PATHS），与 /health 同级公开
+# ═══════════════════════════════════════════════════════════════════════════
+@app.get("/", include_in_schema=False)
+async def index():
+    return FileResponse(ROOT / "index.html")
 
 
 # ── 在线问答 ─────────────────────────────────────────────────────────────────

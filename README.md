@@ -223,6 +223,7 @@ python evals/gate.py    # 本地复跑（纯 numpy 确定性，零模型权重�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/` | Web UI（查询框 + 置信度/候选展示 + 免责声明；鉴权豁免） |
 | POST | `/query` | 在线问答；低置信自动拦截入队并返回兜底话术 |
 | GET | `/health` | 健康检查（编码后端 / 索引规模；鉴权豁免） |
 | GET | `/stats` | 可观测性（命中贡献 / 分阶段延迟 / P95 / 队列水位） |
@@ -239,6 +240,7 @@ python evals/gate.py    # 本地复跑（纯 numpy 确定性，零模型权重�
 
 ```
 ├── serve.py                    # FastAPI 在线服务（lifespan 加载模型 + 四组接口）
+├── index.html                  # Web UI（查询框 + 置信度/候选展示 + 免责声明）
 ├── src/
 │   ├── hybrid_retriever.py     # BM25+Dense 双路召回 → RRF → CE 精排 → 双闸门置信度
 │   ├── active_learning.py      # 标注队列 / 意图聚类 / draft 生成 / 灰度转正
