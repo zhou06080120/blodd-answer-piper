@@ -50,6 +50,16 @@ BERT 基座无需上传——`Dockerfile.deploy` 构建期自动从 HF 拉取 `b
 - 升级 Render Starter（$7/月），或
 - 切 Zeabur（内存档位更宽裕，约 $5/月），配置同 `render.yaml`
 
-## 四、README 接线
+## 四、Zeabur 部署（无国际信用卡时）
+
+Render 创建服务（含免费档）已强制绑 Visa/MasterCard 验证。没有双币卡时走 Zeabur：
+
+1. [zeabur.com](https://zeabur.com) 注册（GitHub 登录）→ 充值（**支持支付宝**）
+2. 创建 Project → Add Service → **Git** → 授权并选 `blodd-answer-piper` 仓库
+3. 构建配置：仓库根的 `zbpack.json` 已指定 `Dockerfile.deploy`（模型进镜像的 Demo 形态），Zeabur 自动识别，无需手填
+4. 区域选**东京**（对国内访问最近）；内存档位建议 **1 GB**（BERT + torch，512MB 紧张）
+5. 域名：服务 → Networking → 生成默认域名（`.zeabur.app`，国内直连快；也可绑自定义域名）
+
+## 五、README 接线
 
 部署后替换 `README.md`「在线体验」一节的 `{YOUR-APP}.onrender.com` 占位符。
