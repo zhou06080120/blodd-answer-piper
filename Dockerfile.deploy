@@ -13,6 +13,10 @@
 # ── 阶段 1：依赖 + BERT 基座 ───────────────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
+# HF 端点：国内服务器构建时传 --build-arg HF_ENDPOINT=https://hf-mirror.com（国内镜像加速）
+ARG HF_ENDPOINT=https://huggingface.co
+ENV HF_ENDPOINT=${HF_ENDPOINT}
+
 WORKDIR /build
 COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir --target=/deps .
