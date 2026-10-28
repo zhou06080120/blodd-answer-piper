@@ -1,0 +1,62 @@
+# ═════════════════════════════════════════════════════════════════
+# 部署专用镜像（Demo 形态）：模型烧进镜像，任何平台拉起即用
+# 与根 Dockerfile 的分工：
+#   根 Dockerfile   = 生产形态，模型运行时挂载、缺模型 fail-fast（保持不动）
+#   本 Dockerfile.deploy = 公网 Demo 形态，构建期自备模型（Render 免费实例无持久卷）
+#
+# 前置条件：训练产物已上传 Hugging Face Hub（GitHub 单文件 100MB 限制装不下 173MB 权重）：
+#   1. 运行 deploy/upload_models_to_hf.py 上传最小部署集（需 HF_TOKEN，见脚本头注释）
+#   2. 本文件构建期从该模型仓自动拉取产物到镜像内 outputs/
+#   3. 改模型仓名需同步下方 snapshot_download 一行
+# ═════════════════════════════════════════════════════════════════
+
+# ── 阶段 1：依赖 + BERT 基座 ───────────────────────────────────────────────────
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+COPY pyproject.toml README.md ./
+RUN pip install --no-cache-dir --target=/deps .
+
+# CPU 版 torch + transformers（与根 Dockerfile 同款最小模型栈）
+RUN pip install --no-cache-dir --target=/deps torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir --target=/deps "transformers>=4.38.0"
+
+# BERT 基座：构建期从 Hugging Face 拉取 bert-base-chinese（仅必要文件，约 400MB）
+RUN pip install --no-cache-dir --target=/deps huggingface_hub && \
+    PYTHONPATH=/deps python -c "from huggingface_hub import snapshot_download; snapshot_download('bert-base-chinese', local_dir='/models/bert-base-chinese', allow_patterns=['config.json','vocab.txt','tokenizer_config.json','pytorch_model.bin'])"
+
+# 训练产物：从本项目 HF 模型仓拉取最小部署集（biencoder .pt + ONNX INT8 + CE，共约 390MB）
+# 仓内文件由 deploy/upload_models_to_hf.py 上传；改仓名需同步此行
+RUN PYTHONPATH=/deps python -c "from huggingface_hub import snapshot_download; snapshot_download('zhou06080120/blodd-answer-piper-models', local_dir='/models/outputs')"
+
+# ── 阶段 2：运行时镜像 ───────────────────────────────────────────────────────
+FROM python:3.12-slim
+
+RUN useradd --create-home --uid 1000 appuser
+
+WORKDIR /app
+COPY --from=builder /deps /deps
+COPY --from=builder /models /models
+
+COPY serve.py ./
+COPY src ./src
+COPY data ./data
+# 训练产物（构建期已从 HF 模型仓拉到 builder 层 /models/outputs）
+COPY --from=builder /models/outputs ./outputs
+
+USER appuser
+
+# 与根 Dockerfile 的差异：BP_BERT_PATH 指向镜像内路径 + PORT 平台适配
+ENV PYTHONPATH=/deps \
+    PYTHONUNBUFFERED=1 \
+    BP_BERT_PATH=/models/bert-base-chinese \
+    PORT=8000
+
+EXPOSE 8000
+
+# 冷启动需加载 ONNX 会话 + 全库 Dense 编码建索引，start-period 放宽 90s
+HEALTHCHECK --interval=30s --timeout=8s --start-period=90s --retries=3 \
+    CMD python -c 'import os,urllib.request; urllib.request.urlopen("http://127.0.0.1:%s/health" % os.environ.get("PORT","8000"), timeout=6)'
+
+# shell 形式以读取 $PORT（平台注入时生效，本地回落 8000）
+CMD python -m uvicorn serve:app --host 0.0.0.0 --port ${PORT:-8000}

@@ -1,0 +1,13 @@
+# Render Blueprint：New → Blueprint 选本仓库即可识别部署
+# 定位：按需唤醒的演示实例（不配心跳保活，见 deploy/DEPLOY.md 免费额度策略）
+# 注意：本服务使用部署专用镜像（模型烧进镜像），原 Dockerfile 保持生产形态外挂模型不动
+services:
+  - type: web
+    name: blodd-answer-piper
+    runtime: docker
+    dockerfilePath: ./Dockerfile.deploy
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    autoDeploy: true
+    # 纯本地模型服务，无 API Key；全部配置见 Dockerfile.deploy 内注释

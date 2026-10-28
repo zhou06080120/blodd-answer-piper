@@ -7,6 +7,12 @@
 
 面向医疗器械（血压计）场景的 FAQ 智能问答引擎：Sentence-BERT 双塔召回（难负例对比训练）+ BM25/Dense/RRF 混合检索 + CrossEncoder 精排的两阶段架构，ONNX INT8 量化 CPU 部署，低置信拦截 + 意图聚类 + 灰度转正的主动学习数据闭环，通过 FastAPI 提供在线服务。
 
+## 在线体验
+
+- **Demo**：https://{YOUR-APP}.onrender.com ——低频演示实例（无心跳保活），冷启动需加载 BERT 模型并建全库索引（首次打开约 2 分钟，请耐心）；纯本地模型服务，无 Key、无限流之外的限制
+- **反馈**：检索不准 / 域外误拦？[提交 Issue](../../issues/new?labels=feedback&template=feedback.md)——长尾问法将进入主动学习闭环（低置信队列 → 灰度转正）
+- 部署手册：[deploy/DEPLOY.md](deploy/DEPLOY.md)（模型进镜像的 Demo 形态，生产形态仍为外挂 fail-fast）
+
 ```
                 ┌─────────────── 在线链路 ───────────────┐
 用户提问 → BM25 ─┐                                        │
