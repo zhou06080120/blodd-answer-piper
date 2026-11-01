@@ -10,6 +10,7 @@
 ## 在线体验
 
 - **Demo**：http://8.148.220.136:8003 ——阿里云轻量服务器常驻部署；ONNX INT8 量化推理 + CrossEncoder 精排全量加载；纯本地模型服务，无 Key、无限流之外的限制
+- **服务状态**：[UptimeRobot 状态页](https://stats.uptimerobot.com/N2GzdOFuea)（第三方独立探测，24h/7d/30d 在线率可审计）
 - **反馈**：检索不准 / 域外误拦？[提交 Issue](../../issues/new?labels=feedback&template=feedback.md)——长尾问法将进入主动学习闭环（低置信队列 → 灰度转正）
 - 部署手册：[deploy/DEPLOY.md](deploy/DEPLOY.md)（模型进镜像的 Demo 形态，生产形态仍为外挂 fail-fast）
 
