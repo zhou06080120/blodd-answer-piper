@@ -274,10 +274,10 @@ async def query(q: QueryIn):
 # ── 可观测性 ─────────────────────────────────────────────────────────────────
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 路由：GET /health —— 存活/就绪检查（给负载均衡与监控探针用）
+# 路由：GET|HEAD /health —— 存活/就绪检查（给负载均衡与监控探针用）
 # 输入：无　输出：后端类型、库/索引规模、当前阈值
 # ═══════════════════════════════════════════════════════════════════════════
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])  # GET+HEAD：兼容第三方监控默认 HEAD 探测（UptimeRobot 免费版不可改 method）
 def health():
     return {"status": "ok", "dense_backend": getattr(S.get("dense_enc"), "backend", None),  # Dense 后端类型（onnx/torch）
             "kb_size": len(S.get("kb", [])), "index_size": S.get("retriever", None) and S["retriever"].n,  # KB 条数与索引问法数
